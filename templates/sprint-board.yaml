@@ -1,0 +1,51 @@
+# Sprint Board — Multi-Session Development
+# This file is shared across all worktrees via the project root directory.
+# Location: {project-root}/{board_dir}/sprint-board.yaml
+#
+# IMPORTANT: This file is git-ignored. It tracks local session state only.
+# Story statuses here reflect development progress, not planning status.
+#
+# Lock protocol: Before writing, acquire lock via:
+#   mkdir {board_dir}/sprint-board.lock
+# After writing, release via:
+#   rmdir {board_dir}/sprint-board.lock
+
+# --- SESSION REGISTRY ---
+# Active development sessions. Each session claims one story at a time.
+sessions: {}
+  # Example:
+  # sess-a1b2c3:
+  #   story: "1-2-user-auth"
+  #   branch: "feat/1-2-user-auth"
+  #   worktree: ".worktrees/1-2-user-auth"
+  #   stack: "react"
+  #   status: "in-progress"          # in-progress | checkpoint | blocked | review | done
+  #   started_at: "2026-01-30T10:00:00Z"
+  #   last_checkpoint: ""
+  #   current_task: "Task 1"
+
+# --- STORY STATUS ---
+# Mirrors sprint-status.yaml but adds session tracking.
+# Statuses: ready-for-dev | claimed | in-progress | review | done
+stories: {}
+  # Example:
+  # 1-1-project-setup:
+  #   status: "done"
+  #   claimed_by: ""
+  #   branch: ""
+  #   pr_url: ""
+  #   completed_at: "2026-01-29T18:00:00Z"
+  #
+  # 1-2-user-auth:
+  #   status: "in-progress"
+  #   claimed_by: "sess-a1b2c3"
+  #   branch: "feat/1-2-user-auth"
+  #   pr_url: ""
+  #   completed_at: ""
+  #
+  # 1-3-dashboard:
+  #   status: "ready-for-dev"
+  #   claimed_by: ""
+  #   branch: ""
+  #   pr_url: ""
+  #   completed_at: ""

@@ -1,0 +1,30 @@
+{
+  "name": "bmad-bmm-multi-dev",
+  "version": "1.0.0",
+  "description": "BMM Multi-Dev: Multi-session development with git worktrees, sprint board, and stack-specialized agents",
+  "keywords": [
+    "bmad",
+    "bmad-module",
+    "bmm",
+    "multi-session",
+    "worktrees",
+    "sprint-board",
+    "react",
+    "react-native",
+    "laravel"
+  ],
+  "author": "Fede",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "scripts": {
+    "release": "git tag v$npm_package_version && git push --tags"
+  },
+  "bmad": {
+    "type": "extension",
+    "extends": "bmm",
+    "code": "bmm-multi-dev"
+  }
+}

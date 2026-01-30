@@ -1,0 +1,47 @@
+code: bmm
+name: "BMM Multi-Dev: Multi-Session Implementation"
+header: "Multi-session development with git worktrees, sprint board, and stack-specialized agents"
+subheader: "Extension module for BMM Phase 4 — Enables parallel development sessions with manual checkpoints"
+default_selected: false
+
+# Variables from Core Config inserted:
+## user_name
+## communication_language
+## document_output_language
+## output_folder
+
+worktree_dir:
+  prompt: "Directory name for git worktrees (relative to project root)?"
+  default: ".worktrees"
+  result: "{value}"
+
+board_dir:
+  prompt: "Directory name for the sprint board (relative to project root)?"
+  default: "_bmad-board"
+  result: "{value}"
+
+default_stack:
+  prompt: "What is your primary tech stack?"
+  default: "react"
+  result: "{value}"
+  single-select:
+    - value: "react"
+      label: "React (Vite, Next.js, etc.)"
+    - value: "react-native"
+      label: "React Native (Expo or bare)"
+    - value: "laravel"
+      label: "Laravel (PHP)"
+    - value: "auto"
+      label: "Auto-detect per story"
+
+pr_merge_strategy:
+  prompt: "What merge strategy do you use for PRs?"
+  default: "squash"
+  result: "{value}"
+  single-select:
+    - value: "squash"
+      label: "Squash merge (recommended)"
+    - value: "merge"
+      label: "Merge commit"
+    - value: "rebase"
+      label: "Rebase and merge"

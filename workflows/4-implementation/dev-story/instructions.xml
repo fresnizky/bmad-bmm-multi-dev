@@ -1,0 +1,564 @@
+<workflow>
+  <critical>The workflow execution engine is governed by: {project-root}/_bmad/core/tasks/workflow.xml</critical>
+  <critical>You MUST have already loaded and processed: {installed_path}/workflow.yaml</critical>
+  <critical>Communicate all responses in {communication_language} and language MUST be tailored to {user_skill_level}</critical>
+  <critical>Generate all documents in {document_output_language}</critical>
+  <critical>Only modify the story file in these areas: Tasks/Subtasks checkboxes, Dev Agent Record (Debug Log, Completion Notes), File List,
+    Change Log, and Status</critical>
+  <critical>Execute ALL steps in exact order; do NOT skip steps</critical>
+  <critical>Load {conventions} at startup — ALL git operations MUST follow documented conventions</critical>
+  <critical>Load {board_schema} at startup — ALL board operations MUST follow the concurrency protocol</critical>
+  <critical>User skill level ({user_skill_level}) affects conversation style ONLY, not code updates.</critical>
+
+  <!-- =================================================================== -->
+  <!-- STEP 1: CLAIM STORY                                                  -->
+  <!-- =================================================================== -->
+  <step n="1" goal="Find an available story and claim it on the sprint board">
+
+    <!-- Generate session ID -->
+    <action>Generate a unique session ID: sess-{random-6-hex-chars}</action>
+    <action>Store as {{session_id}}</action>
+
+    <!-- Resolve project root (works from worktree too) -->
+    <action>Run: git rev-parse --git-common-dir → derive {{project_root}} as parent of .git dir</action>
+    <action>Set {{board_path}} = {{project_root}}/{board_dir}/sprint-board.yaml</action>
+
+    <!-- Initialize board if needed -->
+    <check if="{{board_path}} does NOT exist">
+      <action>Create directory {{project_root}}/{board_dir}/</action>
+      <action>Add {board_dir}/ to .gitignore if not already present</action>
+      <action>Add {worktree_dir}/ to .gitignore if not already present</action>
+
+      <check if="{{sprint_status}} file exists">
+        <action>Read {{sprint_status}} and extract all story keys and statuses</action>
+        <action>Populate sprint-board.yaml stories section from sprint-status data</action>
+        <action>Map statuses: ready-for-dev → ready-for-dev, in-progress → ready-for-dev (reset unclaimed), done → done</action>
+      </check>
+
+      <check if="{{sprint_status}} does NOT exist">
+        <action>Search {story_dir} for story files matching *-*-*.md</action>
+        <action>Read each story file status section</action>
+        <action>Populate sprint-board.yaml stories section from discovered story files</action>
+      </check>
+
+      <output>📋 Sprint board initialized at {board_dir}/sprint-board.yaml</output>
+    </check>
+
+    <!-- Check for explicit story path -->
+    <check if="{{story_path}} is provided">
+      <action>Use {{story_path}} directly</action>
+      <action>Read COMPLETE story file</action>
+      <action>Extract story_key from filename or metadata</action>
+      <goto anchor="claim_story" />
+    </check>
+
+    <!-- Find available story from board -->
+    <action>Acquire board lock (follow concurrency protocol from {board_schema})</action>
+    <action>Read COMPLETE sprint-board.yaml</action>
+    <action>Find the FIRST story where:
+      - status == "ready-for-dev"
+      - claimed_by is empty
+      - Key matches pattern: number-number-name (NOT epic or retrospective keys)
+    </action>
+    <action>Release board lock</action>
+
+    <check if="no available story found">
+      <output>📋 No available stories on the sprint board.
+
+        **Active Sessions:**
+        {{list_active_sessions}}
+
+        **What would you like to do?**
+        1. Run `create-story` to create next story from epics
+        2. Specify a story file path to develop
+        3. Review the sprint board
+      </output>
+      <ask>Choose option [1], [2], or [3]:</ask>
+
+      <check if="user chooses '1'">
+        <action>HALT — Run create-story workflow</action>
+      </check>
+      <check if="user chooses '2'">
+        <ask>Provide the story file path:</ask>
+        <action>Store as {{story_path}}</action>
+        <goto anchor="claim_story" />
+      </check>
+      <check if="user chooses '3'">
+        <action>Display full sprint board state</action>
+        <action>HALT — User reviews board</action>
+      </check>
+    </check>
+
+    <anchor id="claim_story" />
+
+    <!-- Claim the story on the board -->
+    <action>Acquire board lock</action>
+    <action>Re-read board to verify story is still available (guard against race condition)</action>
+    <check if="story was claimed by another session between reads">
+      <action>Release board lock</action>
+      <output>⚠️ Story was claimed by another session. Searching for next available...</output>
+      <goto step="1" />
+    </check>
+    <action>Update story status to "claimed", set claimed_by = {{session_id}}</action>
+    <action>Register session in sessions section: story, status="claimed", started_at</action>
+    <action>Release board lock</action>
+
+    <action>Store {{story_key}}</action>
+    <action>Find and read COMPLETE story file from {story_dir}/{{story_key}}.md</action>
+    <action>Parse sections: Story, Acceptance Criteria, Tasks/Subtasks, Dev Notes, Dev Agent Record, File List, Change Log, Status</action>
+
+    <output>✅ Story claimed: {{story_key}}
+      Session: {{session_id}}
+    </output>
+
+    <action if="story file inaccessible">HALT: "Cannot develop story without access to story file"</action>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 2: SETUP WORKTREE + BRANCH                                     -->
+  <!-- =================================================================== -->
+  <step n="2" goal="Create git branch and worktree for isolated development">
+
+    <!-- Load conventions for branch naming -->
+    <action>Load {conventions} to determine branch type</action>
+    <action>Determine branch type from story context:
+      - Feature story → feat/
+      - Bug fix story → fix/
+      - Refactoring story → refactor/
+      - Maintenance story → chore/
+    </action>
+    <action>Set {{branch_name}} = {type}/{{story_key}} (following conventions)</action>
+
+    <!-- Ensure main is up to date -->
+    <action>From project root: git fetch origin</action>
+    <action>Verify main is up to date with origin/main</action>
+
+    <!-- Create worktree -->
+    <action>Set {{worktree_path}} = {{project_root}}/{worktree_dir}/{{story_key}}</action>
+
+    <check if="worktree already exists at {{worktree_path}}">
+      <output>⏯️ Existing worktree found for {{story_key}} — resuming development</output>
+      <action>Verify the worktree branch matches {{branch_name}}</action>
+    </check>
+
+    <check if="worktree does NOT exist">
+      <action>Create directory {worktree_dir}/ if it doesn't exist</action>
+      <action>Run: git worktree add {{worktree_path}} -b {{branch_name}} main</action>
+    </check>
+
+    <!-- Update board with branch and worktree info -->
+    <action>Acquire board lock</action>
+    <action>Update session: branch={{branch_name}}, worktree={{worktree_path}}, status="in-progress"</action>
+    <action>Update story: status="in-progress", branch={{branch_name}}</action>
+    <action>Release board lock</action>
+
+    <!-- CRITICAL: Change working directory -->
+    <critical>ALL subsequent file operations and git commands MUST execute from {{worktree_path}}</critical>
+    <action>Change working directory to {{worktree_path}}</action>
+
+    <output>🌿 Worktree ready
+      Branch: {{branch_name}}
+      Path: {{worktree_path}}
+      Working directory set to worktree.
+    </output>
+
+    <action if="git worktree add fails">HALT: "Failed to create worktree. Check if branch already exists or worktree path is in use."</action>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 3: LOAD CONTEXT + DETECT STACK                                 -->
+  <!-- =================================================================== -->
+  <step n="3" goal="Load project context, detect tech stack, and load specialized agent patterns">
+
+    <action>Load {project_context} for coding standards and project-wide patterns (if exists)</action>
+    <action>Load comprehensive context from story file's Dev Notes section</action>
+    <action>Extract developer guidance from Dev Notes: architecture requirements, previous learnings, technical specifications</action>
+
+    <!-- Stack detection -->
+    <check if="{default_stack} == 'auto'">
+      <action>Auto-detect stack from project files in worktree:
+        - package.json with "react-native" dependency → react-native
+        - package.json with "react" (no react-native) → react
+        - composer.json with "laravel/framework" → laravel
+        - Multiple detected → ask user
+        - None detected → ask user
+      </action>
+    </check>
+
+    <check if="{default_stack} != 'auto'">
+      <action>Use {default_stack} as the stack</action>
+    </check>
+
+    <action>Store detected stack as {{active_stack}}</action>
+
+    <!-- Load stack-specific patterns -->
+    <action>Load {stack_patterns_dir}/{{active_stack}}.md for stack-specific:
+      - Project structure conventions
+      - Testing tools and patterns (TDD approach)
+      - Coding standards
+      - Common patterns and anti-patterns
+    </action>
+
+    <!-- Detect review continuation -->
+    <check if="Senior Developer Review (AI) section exists in story file">
+      <action>Set review_continuation = true</action>
+      <action>Extract pending review items</action>
+      <output>⏯️ **Resuming After Code Review**
+        Review items remaining: {{unchecked_review_count}}
+        Strategy: Address review follow-ups first, then continue with regular tasks.
+      </output>
+    </check>
+
+    <check if="Senior Developer Review section does NOT exist">
+      <action>Set review_continuation = false</action>
+    </check>
+
+    <action>Identify first incomplete task (unchecked [ ]) in Tasks/Subtasks</action>
+
+    <output>✅ **Context Loaded**
+      Story: {{story_key}}
+      Stack: {{active_stack}}
+      First task: {{first_task_description}}
+      Total tasks: {{total_tasks}} ({{completed_tasks}} done, {{remaining_tasks}} remaining)
+    </output>
+
+    <action if="no incomplete tasks">
+      <goto step="7">Story already complete — generate verification</goto>
+    </action>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 4: IMPLEMENT TASK (Red-Green-Refactor)                          -->
+  <!-- =================================================================== -->
+  <step n="4" goal="Implement current task following TDD cycle with stack-specific patterns">
+    <critical>FOLLOW THE STORY FILE TASKS/SUBTASKS SEQUENCE EXACTLY AS WRITTEN — NO DEVIATION</critical>
+    <critical>Apply {{active_stack}} patterns from loaded stack patterns file</critical>
+
+    <action>Review the current task/subtask from the story file</action>
+    <action>Plan implementation using stack-specific patterns and TDD cycle</action>
+
+    <!-- RED PHASE -->
+    <action>Write FAILING tests first for the task/subtask functionality</action>
+    <action>Use testing tools appropriate for {{active_stack}} (from stack patterns)</action>
+    <action>Confirm tests fail before implementation — this validates test correctness</action>
+
+    <!-- GREEN PHASE -->
+    <action>Implement MINIMAL code to make tests pass</action>
+    <action>Run tests to confirm they now pass</action>
+    <action>Handle error conditions and edge cases as specified in task/subtask</action>
+
+    <!-- REFACTOR PHASE -->
+    <action>Improve code structure while keeping tests green</action>
+    <action>Ensure code follows architecture patterns and coding standards from Dev Notes and stack patterns</action>
+
+    <action if="new dependencies required beyond story specifications">HALT: "Additional dependencies need user approval"</action>
+    <action if="3 consecutive implementation failures occur">HALT and request guidance</action>
+    <action if="required configuration is missing">HALT: "Cannot proceed without necessary configuration files"</action>
+
+    <critical>NEVER implement anything not mapped to a specific task/subtask in the story file</critical>
+    <critical>NEVER proceed to next step until current task tests pass</critical>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 5: CHECKPOINT VALIDATION                                        -->
+  <!-- =================================================================== -->
+  <step n="5" goal="Present changes for manual review before committing">
+
+    <!-- Run validations -->
+    <action>Determine test runner from project structure and stack patterns</action>
+    <action>Run tests relevant to the current task</action>
+    <action>Run full test suite to check for regressions</action>
+    <action>Run linting/formatting if configured</action>
+
+    <!-- Prepare checkpoint summary -->
+    <action>Generate diff summary: git diff --stat</action>
+    <action>Count lines changed: additions, deletions</action>
+    <action>List files modified, created, deleted</action>
+
+    <output>📍 **Checkpoint — Task {{current_task_number}}: {{current_task_title}}**
+
+      **Changes:**
+      {{diff_stat_summary}}
+
+      **Files ({{files_count}}):**
+      {{files_list_with_status}}
+
+      **Tests:**
+      - New tests: {{new_tests_count}} ({{new_tests_status}})
+      - Full suite: {{full_suite_status}} ({{total_tests}} tests)
+      - Linting: {{lint_status}}
+
+      **What was implemented:**
+      {{brief_implementation_description}}
+
+      ---
+      ✅ **[A] Approve** — Commit and continue to next task
+      🔄 **[F] Request Fix** — Describe what needs to change
+      ❌ **[R] Reject** — Revert changes and re-implement
+      ⏸️ **[P] Pause** — Stash changes and halt session
+    </output>
+
+    <ask>Your decision [A/F/R/P]:</ask>
+
+    <check if="user chooses 'A' (Approve)">
+      <goto step="6" />
+    </check>
+
+    <check if="user chooses 'F' (Fix)">
+      <ask>What needs to be fixed?</ask>
+      <action>Apply requested fixes</action>
+      <goto step="5">Re-validate after fix</goto>
+    </check>
+
+    <check if="user chooses 'R' (Reject)">
+      <action>Revert all uncommitted changes: git checkout -- .</action>
+      <action>Clean untracked files if needed: git clean -fd (only new files from this task)</action>
+      <output>↩️ Changes reverted. Re-implementing task...</output>
+      <goto step="4">Re-implement task</goto>
+    </check>
+
+    <check if="user chooses 'P' (Pause)">
+      <action>Stash changes: git stash push -m "WIP: {{story_key}} task {{current_task_number}}"</action>
+      <action>Acquire board lock</action>
+      <action>Update session status = "blocked", update last_checkpoint</action>
+      <action>Release board lock</action>
+      <output>⏸️ Session paused. Changes stashed.
+        To resume: run dev-story workflow — it will detect the existing worktree and stashed changes.
+      </output>
+      <action>HALT — session paused by user</action>
+    </check>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 6: COMMIT + UPDATE STORY                                        -->
+  <!-- =================================================================== -->
+  <step n="6" goal="Commit approved changes and update story file">
+
+    <!-- Validate task completion before marking -->
+    <critical>NEVER mark a task complete unless ALL conditions are met</critical>
+    <action>Verify ALL tests for this task ACTUALLY EXIST and PASS 100%</action>
+    <action>Confirm implementation matches EXACTLY what the task/subtask specifies</action>
+
+    <!-- Update story file -->
+    <action>Mark the task (and subtasks) checkbox with [x]</action>
+    <action>Update File List section with new/modified/deleted files (paths relative to repo root)</action>
+    <action>Add entry to Change Log with task description and date</action>
+    <action>Add notes to Dev Agent Record summarizing what was implemented and tested</action>
+
+    <!-- Handle review follow-ups -->
+    <check if="task is review follow-up (has [AI-Review] prefix)">
+      <action>Mark task checkbox [x] in Review Follow-ups section</action>
+      <action>Mark corresponding action item in Senior Developer Review section</action>
+      <action>Add to Dev Agent Record: "Resolved review finding [{{severity}}]: {{description}}"</action>
+    </check>
+
+    <!-- Commit following conventions -->
+    <action>Load {conventions} for commit message format</action>
+    <action>Stage all changes: git add -A</action>
+    <action>Commit with conventional message:
+      {type}({{story_key}}): {{task_description}}
+
+      Task: {{task_number}} - {{task_title}}
+      Story: {{story_key}}
+    </action>
+
+    <!-- Update board -->
+    <action>Acquire board lock</action>
+    <action>Update session: last_checkpoint = now, current_task = next task description</action>
+    <action>Release board lock</action>
+
+    <output>✅ Task {{current_task_number}} committed: {{commit_hash_short}}</output>
+
+    <!-- Loop or complete -->
+    <action>Determine if more incomplete tasks remain</action>
+    <check if="more tasks remain">
+      <output>➡️ Next task: {{next_task_description}}</output>
+      <goto step="4">Next task</goto>
+    </check>
+    <check if="no tasks remain">
+      <goto step="7">Story complete</goto>
+    </check>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 7: STORY COMPLETE — MANUAL VERIFICATION CHECKLIST               -->
+  <!-- =================================================================== -->
+  <step n="7" goal="Generate manual verification checklist from acceptance criteria">
+
+    <action>Verify ALL tasks and subtasks are marked [x] (re-scan story file)</action>
+    <action>Run the full regression suite one final time</action>
+    <action>Confirm File List includes every changed file</action>
+
+    <!-- Generate manual verification steps -->
+    <action>Read ALL acceptance criteria from the story file</action>
+    <action>For each AC, generate specific, actionable verification steps:
+      - What to do (step by step)
+      - What to expect (expected result)
+      - How to verify (what to check)
+    </action>
+
+    <output>🧪 **Manual Verification Checklist — {{story_key}}**
+
+      All tasks complete. Please verify the following before proceeding:
+
+      {{generated_verification_checklist}}
+
+      ---
+      After verifying:
+      ✅ **[V] Verified** — Everything works, proceed to code review + PR
+      🔄 **[I] Issues found** — Describe what's wrong
+    </output>
+
+    <ask>Verification result [V/I]:</ask>
+
+    <check if="user chooses 'V' (Verified)">
+      <goto step="8" />
+    </check>
+
+    <check if="user chooses 'I' (Issues)">
+      <ask>Describe the issues found:</ask>
+      <action>Analyze reported issues and determine which task(s) need rework</action>
+      <action>Create fix plan for reported issues</action>
+      <goto step="4">Fix issues</goto>
+    </check>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 8: CODE REVIEW + MANUAL APPROVAL                               -->
+  <!-- =================================================================== -->
+  <step n="8" goal="Facilitate code review and final approval">
+
+    <output>📝 **Ready for Code Review — {{story_key}}**
+
+      **Recommended:** Run the `code-review` workflow using a **different LLM** than this session.
+
+      **Options:**
+      1. Run `code-review` workflow now (will HALT this session — resume after review)
+      2. Skip code review and proceed to PR creation
+      3. Mark that code review was already done externally
+    </output>
+
+    <ask>Choose option [1], [2], or [3]:</ask>
+
+    <check if="user chooses '1'">
+      <action>Update story Status to "review"</action>
+      <action>Acquire board lock</action>
+      <action>Update session status = "review"</action>
+      <action>Update story status = "review"</action>
+      <action>Release board lock</action>
+      <output>⏸️ Session paused for code review.
+        After review, run dev-story again — it will detect the review results and resume.
+        💡 Tip: Use a different LLM for the code review for best results.
+      </output>
+      <action>HALT — waiting for code review</action>
+    </check>
+
+    <check if="user chooses '2' or '3'">
+      <goto step="9" />
+    </check>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 9: FINALIZE — PR CREATION                                       -->
+  <!-- =================================================================== -->
+  <step n="9" goal="Push branch, create PR, and update sprint board">
+
+    <!-- Final commit if any pending changes -->
+    <action>Check for uncommitted changes (story file updates, etc.)</action>
+    <check if="uncommitted changes exist">
+      <action>Stage and commit: chore({{story_key}}): finalize story for review</action>
+    </check>
+
+    <!-- Push branch -->
+    <action>Push branch to remote: git push -u origin {{branch_name}}</action>
+
+    <!-- Create PR -->
+    <action>Load {conventions} for PR format</action>
+    <action>Load PR template from {project-root}/_bmad/bmm-multi-dev/templates/pr-template.md</action>
+    <action>Generate PR body:
+      - Story key, title, epic
+      - Implementation summary (from Dev Agent Record)
+      - Changes list (from Change Log)
+      - Acceptance criteria checklist
+      - Manual verification steps (from step 7)
+    </action>
+    <action>Create PR via: gh pr create --title "{{pr_title}}" --body "{{pr_body}}"</action>
+    <action>Store {{pr_url}} from gh output</action>
+
+    <!-- Update story file -->
+    <action>Update story Status to "review"</action>
+    <action>Add PR URL to Dev Agent Record</action>
+    <action>Commit and push: chore({{story_key}}): add PR reference</action>
+
+    <!-- Update sprint board -->
+    <action>Acquire board lock</action>
+    <action>Update story: status="review", pr_url={{pr_url}}</action>
+    <action>Update session: status="review"</action>
+    <action>Release board lock</action>
+
+    <!-- Also update sprint-status.yaml if it exists -->
+    <check if="{{sprint_status}} file exists">
+      <action>Update story status to "review" in sprint-status.yaml</action>
+    </check>
+
+    <output>🚀 **PR Created — {{story_key}}**
+
+      **PR:** {{pr_url}}
+      **Branch:** {{branch_name}}
+
+      **Summary:**
+      {{implementation_summary}}
+
+      **Next steps:**
+      - Review and approve the PR
+      - After merge, run this workflow again — it will clean up the worktree (step 10)
+      - Or start a new story in a new session
+    </output>
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- STEP 10: POST-MERGE CLEANUP                                          -->
+  <!-- =================================================================== -->
+  <step n="10" goal="Clean up worktree and branch after PR merge">
+    <critical>This step runs when the workflow detects a story in "review" status with a merged PR</critical>
+
+    <!-- Verify PR is merged -->
+    <action>Check PR status via: gh pr view {{pr_url}} --json state</action>
+
+    <check if="PR is merged">
+      <!-- Return to project root before cleanup -->
+      <action>Change working directory back to {{project_root}}</action>
+
+      <!-- Update main -->
+      <action>git checkout main</action>
+      <action>git pull origin main</action>
+
+      <!-- Remove worktree and branch -->
+      <action>git worktree remove {{worktree_path}}</action>
+      <action>git branch -d {{branch_name}}</action>
+
+      <!-- Update board -->
+      <action>Acquire board lock</action>
+      <action>Update story: status="done", completed_at=now</action>
+      <action>Remove session from sessions registry</action>
+      <action>Release board lock</action>
+
+      <!-- Update sprint-status.yaml if exists -->
+      <check if="{{sprint_status}} file exists">
+        <action>Update story status to "done" in sprint-status.yaml</action>
+      </check>
+
+      <output>🏁 **Story Complete — {{story_key}}**
+        Worktree removed, branch deleted, board updated.
+        Ready for the next story!
+      </output>
+    </check>
+
+    <check if="PR is NOT merged">
+      <output>⏳ PR {{pr_url}} is not merged yet. Cleanup will happen after merge.
+        Run this workflow again after the PR is merged.
+      </output>
+    </check>
+  </step>
+
+</workflow>

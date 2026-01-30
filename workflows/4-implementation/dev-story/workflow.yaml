@@ -1,0 +1,38 @@
+name: dev-story
+description: "Multi-session story execution with git worktrees, sprint board, manual checkpoints, and stack-specialized agents"
+author: "Fede (bmm-multi-dev extension)"
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/bmm/config.yaml"
+output_folder: "{config_source}:output_folder"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+user_skill_level: "{config_source}:user_skill_level"
+document_output_language: "{config_source}:document_output_language"
+story_dir: "{config_source}:implementation_artifacts"
+date: system-generated
+
+# Multi-dev extension variables
+ext_config_source: "{project-root}/_bmad/bmm-multi-dev/config.yaml"
+worktree_dir: "{ext_config_source}:worktree_dir"
+board_dir: "{ext_config_source}:board_dir"
+default_stack: "{ext_config_source}:default_stack"
+pr_merge_strategy: "{ext_config_source}:pr_merge_strategy"
+
+# Workflow components
+installed_path: "{project-root}/_bmad/bmm-multi-dev/workflows/4-implementation/dev-story"
+instructions: "{installed_path}/instructions.xml"
+validation: "{installed_path}/checklist.md"
+
+# Data references
+conventions: "{project-root}/_bmad/bmm-multi-dev/data/conventions.md"
+board_schema: "{project-root}/_bmad/bmm-multi-dev/data/sprint-board-schema.md"
+stack_patterns_dir: "{project-root}/_bmad/bmm-multi-dev/data/stack-patterns"
+
+story_file: "" # Explicit story path; auto-discovered if empty
+implementation_artifacts: "{config_source}:implementation_artifacts"
+sprint_status: "{implementation_artifacts}/sprint-status.yaml"
+sprint_board: "{project-root}/{board_dir}/sprint-board.yaml"
+project_context: "**/project-context.md"
+
+standalone: true
