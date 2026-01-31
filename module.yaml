@@ -1,4 +1,4 @@
-code: bmm
+code: bmm-multi-dev
 name: "BMM Multi-Dev: Multi-Session Implementation"
 header: "Multi-session development with git worktrees, sprint board, and stack-specialized agents"
 subheader: "Extension module for BMM Phase 4 — Enables parallel development sessions with manual checkpoints"

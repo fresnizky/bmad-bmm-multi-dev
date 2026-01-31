@@ -1,6 +1,6 @@
 {
   "name": "bmad-bmm-multi-dev",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "BMM Multi-Dev: Multi-session development with git worktrees, sprint board, and stack-specialized agents",
   "keywords": [
     "bmad",
