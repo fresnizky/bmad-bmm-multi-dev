@@ -6,9 +6,206 @@
   <critical>Only modify the story file in these areas: Tasks/Subtasks checkboxes, Dev Agent Record (Debug Log, Completion Notes), File List,
     Change Log, and Status</critical>
   <critical>Execute ALL steps in exact order; do NOT skip steps</critical>
+  <critical>When {docker_isolation} is enabled, each worktree gets its own Docker Compose project with isolated ports. Port allocation uses slot-based offsets from {docker_port_base}.</critical>
   <critical>Load {conventions} at startup — ALL git operations MUST follow documented conventions</critical>
   <critical>Load {board_schema} at startup — ALL board operations MUST follow the concurrency protocol</critical>
   <critical>User skill level ({user_skill_level}) affects conversation style ONLY, not code updates.</critical>
+
+  <!-- =================================================================== -->
+  <!-- STEP 0: MODE DETECTION                                               -->
+  <!-- =================================================================== -->
+  <step n="0" goal="Detect if user wants normal story execution or maintenance/cleanup mode">
+
+    <check if="user invoked workflow with 'cleanup' or 'gc' or 'maintenance' argument">
+      <goto anchor="gc_mode" />
+    </check>
+
+    <!-- Normal flow — proceed to Step 1 -->
+    <goto step="1" />
+  </step>
+
+  <!-- =================================================================== -->
+  <!-- GC MODE: GARBAGE COLLECTION / MAINTENANCE                            -->
+  <!-- =================================================================== -->
+  <anchor id="gc_mode" />
+  <step n="gc" goal="Full audit and cleanup of orphaned worktrees, containers, board sessions, and port slots">
+
+    <!-- Resolve project root -->
+    <action>Run: git rev-parse --git-common-dir → derive {{project_root}}</action>
+    <action>Set {{board_path}} = {{project_root}}/{board_dir}/sprint-board.yaml</action>
+
+    <check if="{{board_path}} does NOT exist">
+      <output>📋 No sprint board found — nothing to clean up.</output>
+      <action>HALT</action>
+    </check>
+
+    <!-- ===== PHASE 1: AUDIT ===== -->
+    <action>Read COMPLETE sprint-board.yaml</action>
+
+    <!-- Audit worktrees on disk vs board -->
+    <action>List all directories under {{project_root}}/{worktree_dir}/</action>
+    <action>List all git worktrees via: git worktree list --porcelain</action>
+    <action>Cross-reference with board sessions to identify:
+      - **Orphaned worktrees**: directories on disk with no matching board session
+      - **Ghost sessions**: board sessions whose worktree directory is missing
+      - **Active sessions**: board sessions with existing worktrees
+    </action>
+
+    <!-- Audit Docker containers (if docker_isolation enabled) -->
+    <check if="{docker_isolation} is true">
+      <action>List all running Docker Compose projects matching pattern "alquileres-wt-*":
+        docker compose ls --format json | filter by project name prefix</action>
+      <action>Cross-reference with board sessions to identify:
+        - **Orphaned containers**: running Docker projects with no matching board session
+        - **Stopped containers**: board sessions with compose_project but containers not running
+        - **Active containers**: running Docker projects with matching active session
+      </action>
+      <action>List all allocated port_slots from board sessions</action>
+    </check>
+
+    <!-- Audit branches -->
+    <action>List all local branches matching feat/*, fix/*, refactor/*, chore/* patterns</action>
+    <action>Cross-reference with board sessions to identify orphaned branches</action>
+
+    <!-- ===== PHASE 2: REPORT ===== -->
+    <output>🔍 **Resource Audit Report**
+
+      **Board Sessions ({{total_sessions}}):**
+      {{for each session}}
+      - {{session_id}}: {{story_key}} [{{status}}]
+        Last activity: {{last_checkpoint}} ({{hours_ago}}h ago)
+        Worktree: {{worktree_status}} | Branch: {{branch_status}}
+        {{if docker_isolation}}Docker: {{container_status}} | Port slot: {{port_slot}}{{/if}}
+      {{/for}}
+
+      **Orphaned Resources:**
+      - Worktree directories without board session: {{orphaned_worktrees_count}}
+        {{orphaned_worktrees_list}}
+      - Board sessions without worktree on disk: {{ghost_sessions_count}}
+        {{ghost_sessions_list}}
+      - Orphaned branches: {{orphaned_branches_count}}
+        {{orphaned_branches_list}}
+      {{if docker_isolation}}
+      - Orphaned Docker projects: {{orphaned_containers_count}}
+        {{orphaned_containers_list}}
+      - Port slots in use: {{used_slots}} / {docker_max_worktrees}
+      {{/if}}
+
+      ---
+      **Cleanup Options:**
+      🧹 **[A] Clean ALL orphaned resources** — Remove everything not tied to an active session
+      🎯 **[S] Selective cleanup** — Choose which resources to clean
+      🛑 **[F] Force clean EVERYTHING** — Stop all sessions, remove all worktrees and containers
+      ❌ **[X] Exit** — Do nothing
+    </output>
+
+    <ask>Choose cleanup option [A/S/F/X]:</ask>
+
+    <!-- OPTION A: Clean all orphaned -->
+    <check if="user chooses 'A'">
+      <action>For each orphaned worktree:
+        - git worktree remove {{path}} --force</action>
+
+      <check if="{docker_isolation} is true">
+        <action>For each orphaned Docker project:
+          - docker compose -p {{project_name}} down -v</action>
+      </check>
+
+      <action>For each orphaned branch:
+        - git branch -D {{branch_name}}</action>
+
+      <action>Acquire board lock</action>
+      <action>For each ghost session:
+        - Remove session from board
+        - Reset story status to "ready-for-dev", clear claimed_by</action>
+      <action>Release board lock</action>
+
+      <output>🧹 **Orphan cleanup complete**
+        Worktrees removed: {{count}}
+        Branches deleted: {{count}}
+        {{if docker_isolation}}Docker projects stopped: {{count}}
+        Port slots freed: {{count}}{{/if}}
+        Board sessions cleaned: {{count}}
+      </output>
+    </check>
+
+    <!-- OPTION S: Selective cleanup -->
+    <check if="user chooses 'S'">
+      <output>**Select resources to clean up** (comma-separated numbers, or 'all'):</output>
+
+      <action>Present numbered list of ALL cleanable resources:
+        1. [worktree] .worktrees/1-2-story-name (orphaned)
+        2. [docker] alquileres-wt-1-3-other (orphaned, ports 10210-10213)
+        3. [session] sess-abc123 — 1-4-story (ghost, worktree missing)
+        4. [branch] feat/1-2-story-name (orphaned)
+        5. [session] sess-def456 — 1-5-story (stale, {{hours_ago}}h inactive)
+        ...
+      </action>
+
+      <ask>Which resources to clean? (e.g., "1,2,4" or "all"):</ask>
+
+      <action>Execute cleanup only for selected resources</action>
+      <action>For sessions being cleaned: also clean associated worktree, branch, and Docker project</action>
+      <action>Acquire board lock, update board, release lock</action>
+
+      <output>🧹 **Selective cleanup complete**
+        {{summary_of_cleaned_resources}}
+      </output>
+    </check>
+
+    <!-- OPTION F: Force clean everything -->
+    <check if="user chooses 'F'">
+      <output>⚠️ **WARNING: This will stop ALL sessions, remove ALL worktrees, and destroy ALL containers.**
+        Any uncommitted work will be lost. Committed but unpushed work will also be lost.
+
+        **Are you absolutely sure?**
+      </output>
+
+      <ask>Type "CONFIRM" to proceed, anything else to cancel:</ask>
+
+      <check if="user types 'CONFIRM'">
+        <!-- Stop all Docker projects -->
+        <check if="{docker_isolation} is true">
+          <action>For each session with compose_project:
+            docker compose -p {{compose_project}} down -v</action>
+          <action>For each orphaned Docker project:
+            docker compose -p {{project_name}} down -v</action>
+        </check>
+
+        <!-- Remove all worktrees -->
+        <action>For each worktree in {worktree_dir}/:
+          git worktree remove {{path}} --force</action>
+
+        <!-- Delete all session branches -->
+        <action>For each session branch:
+          git branch -D {{branch_name}}</action>
+
+        <!-- Reset board -->
+        <action>Acquire board lock</action>
+        <action>Remove ALL sessions from board</action>
+        <action>Reset all non-"done" stories to "ready-for-dev", clear claimed_by</action>
+        <action>Release board lock</action>
+
+        <output>🔥 **Full cleanup complete**
+          All sessions terminated.
+          All worktrees removed.
+          {{if docker_isolation}}All Docker containers destroyed.
+          All port slots freed.{{/if}}
+          Board reset to clean state.
+        </output>
+      </check>
+
+      <check if="user did NOT type 'CONFIRM'">
+        <output>❌ Force cleanup cancelled.</output>
+      </check>
+    </check>
+
+    <check if="user chooses 'X'">
+      <output>👋 Exiting maintenance mode. No changes made.</output>
+    </check>
+
+    <action>HALT — maintenance mode complete</action>
+  </step>
 
   <!-- =================================================================== -->
   <!-- STEP 1: CLAIM STORY                                                  -->
@@ -44,6 +241,69 @@
       <output>📋 Sprint board initialized at {board_dir}/sprint-board.yaml</output>
     </check>
 
+    <!-- ============================================================= -->
+    <!-- STALE SESSION DETECTION (automatic on every run)              -->
+    <!-- ============================================================= -->
+    <action>Read sprint-board.yaml sessions section</action>
+    <action>For each session where status is NOT "done":
+      - Calculate hours since last_checkpoint (or started_at if no checkpoint)
+      - If hours > {docker_stale_hours}, mark session as stale candidate
+      - Also check if the worktree directory still exists on disk
+      - Also check if the git branch still exists
+    </action>
+
+    <check if="stale sessions found">
+      <output>⚠️ **Stale sessions detected** (inactive > {docker_stale_hours}h):
+
+        {{for each stale session}}
+        - **{{session_id}}**: {{story_key}}
+          Status: {{status}} | Last activity: {{last_checkpoint}} ({{hours_ago}}h ago)
+          Worktree: {{worktree_exists ? "exists" : "missing"}}
+          {{if docker_isolation}}Docker: {{compose_project}} (slot {{port_slot}}){{/if}}
+        {{/for}}
+
+        **Options:**
+        🧹 **[C] Clean up stale sessions** — Stop containers, remove worktrees, free board slots
+        ⏭️ **[S] Skip** — Ignore and continue to story selection
+      </output>
+
+      <ask>Clean up stale sessions? [C/S]:</ask>
+
+      <check if="user chooses 'C' (Clean up)">
+        <action>For each stale session, execute cleanup sequence:</action>
+
+        <!-- Docker cleanup per stale session -->
+        <check if="{docker_isolation} is true AND session has compose_project">
+          <action>Stop and remove containers:
+            docker compose -p {{compose_project}} down -v</action>
+          <action>Remove {{worktree_path}}/{docker_env_file} if it exists</action>
+        </check>
+
+        <!-- Git cleanup per stale session -->
+        <check if="worktree exists at {{worktree_path}}">
+          <action>Remove worktree: git worktree remove {{worktree_path}} --force</action>
+        </check>
+        <check if="branch {{branch_name}} exists locally">
+          <action>Delete branch: git branch -D {{branch_name}}</action>
+        </check>
+
+        <!-- Board cleanup -->
+        <action>Acquire board lock</action>
+        <action>For each cleaned session:
+          - Remove session from sessions registry
+          - Reset story status to "ready-for-dev" and clear claimed_by
+        </action>
+        <action>Release board lock</action>
+
+        <output>🧹 **Cleanup complete**
+          Sessions removed: {{cleaned_count}}
+          Worktrees removed: {{worktrees_removed_count}}
+          {{if docker_isolation}}Docker projects stopped: {{docker_projects_stopped}}
+          Port slots freed: {{slots_freed}}{{/if}}
+        </output>
+      </check>
+    </check>
+
     <!-- Check for explicit story path -->
     <check if="{{story_path}} is provided">
       <action>Use {{story_path}} directly</action>
@@ -72,8 +332,9 @@
         1. Run `create-story` to create next story from epics
         2. Specify a story file path to develop
         3. Review the sprint board
+        4. 🧹 Run maintenance/cleanup (audit and clean orphaned resources)
       </output>
-      <ask>Choose option [1], [2], or [3]:</ask>
+      <ask>Choose option [1], [2], [3], or [4]:</ask>
 
       <check if="user chooses '1'">
         <action>HALT — Run create-story workflow</action>
@@ -86,6 +347,9 @@
       <check if="user chooses '3'">
         <action>Display full sprint board state</action>
         <action>HALT — User reviews board</action>
+      </check>
+      <check if="user chooses '4'">
+        <goto anchor="gc_mode" />
       </check>
     </check>
 
@@ -139,6 +403,14 @@
     <check if="worktree already exists at {{worktree_path}}">
       <output>⏯️ Existing worktree found for {{story_key}} — resuming development</output>
       <action>Verify the worktree branch matches {{branch_name}}</action>
+
+      <!-- Resume Docker containers if worktree already exists -->
+      <check if="{docker_isolation} is true AND {{worktree_path}}/{docker_env_file} exists">
+        <action>Restart stopped containers:
+          docker compose --env-file {docker_env_file} -p alquileres-wt-{{story_key}} up -d</action>
+        <action>Wait for health checks</action>
+        <output>🐳 Docker containers resumed</output>
+      </check>
     </check>
 
     <check if="worktree does NOT exist">
@@ -155,6 +427,73 @@
     <!-- CRITICAL: Change working directory -->
     <critical>ALL subsequent file operations and git commands MUST execute from {{worktree_path}}</critical>
     <action>Change working directory to {{worktree_path}}</action>
+
+    <!-- ============================================================= -->
+    <!-- DOCKER ENVIRONMENT SETUP (only when docker_isolation enabled)  -->
+    <!-- ============================================================= -->
+    <check if="{docker_isolation} is true">
+
+      <!-- Allocate port slot for this worktree -->
+      <action>Read sprint-board.yaml to find all active sessions and their allocated port slots</action>
+      <action>Each session should have a "port_slot" field (integer 1-{docker_max_worktrees})</action>
+      <action>Find the LOWEST available slot not used by any active session</action>
+
+      <check if="no available slot">
+        <action>HALT: "Maximum parallel worktrees ({docker_max_worktrees}) reached. Stop another session's containers first."</action>
+      </check>
+
+      <action>Store {{port_slot}}</action>
+      <action>Calculate port offset: {{port_offset}} = {{port_slot}} * {docker_port_step}</action>
+
+      <!-- Generate .env.ports file in the worktree -->
+      <action>Generate {{worktree_path}}/{docker_env_file} with calculated ports:
+        COMPOSE_PROJECT_NAME=alquileres-wt-{{story_key}}
+        PORT_API={{docker_port_base + port_offset}}
+        PORT_DB={{docker_port_base + port_offset + 1}}
+        PORT_CACHE={{docker_port_base + port_offset + 2}}
+        PORT_POWERSYNC={{docker_port_base + port_offset + 3}}
+      </action>
+
+      <!-- Ensure .env.ports is in .gitignore -->
+      <action>Add {docker_env_file} to .gitignore if not already present</action>
+
+      <!-- Handle shared services -->
+      <check if="{docker_shared_services} is NOT empty">
+        <action>Verify shared services are running on base ports (slot 0).
+          If not, start them: docker compose --env-file with base ports up -d {shared_service_names}</action>
+        <action>In the generated {docker_env_file}, keep shared service ports at their base values</action>
+        <action>Only offset ports for non-shared services</action>
+      </check>
+
+      <!-- Start containers -->
+      <action>From {{worktree_path}}, run:
+        docker compose --env-file {docker_env_file} -p alquileres-wt-{{story_key}} up -d</action>
+      <action>Wait for health checks to pass</action>
+
+      <!-- Run migrations if DB is not shared -->
+      <check if="postgres is NOT in {docker_shared_services}">
+        <action>Run database migrations against the worktree's DB container</action>
+      </check>
+
+      <!-- Update board with port info -->
+      <action>Acquire board lock</action>
+      <action>Update session: port_slot={{port_slot}}, compose_project="alquileres-wt-{{story_key}}"</action>
+      <action>Release board lock</action>
+
+      <output>🐳 Docker environment ready
+        Project: alquileres-wt-{{story_key}}
+        Port slot: {{port_slot}} (offset +{{port_offset}})
+        API: {{calculated_api_port}}
+        DB: {{calculated_db_port}}
+        Cache: {{calculated_cache_port}}
+        PowerSync: {{calculated_powersync_port}}
+        {{shared_services_note}}
+      </output>
+    </check>
+
+    <check if="{docker_isolation} is false OR not set">
+      <output>ℹ️ Docker isolation disabled — using shared/manual container management</output>
+    </check>
 
     <output>🌿 Worktree ready
       Branch: {{branch_name}}
@@ -264,6 +603,17 @@
   <!-- =================================================================== -->
   <step n="5" goal="Present changes for manual review before committing">
 
+    <!-- Verify Docker containers are running before tests -->
+    <check if="{docker_isolation} is true">
+      <action>Verify Docker containers are running:
+        docker compose -p alquileres-wt-{{story_key}} ps --format json</action>
+      <check if="containers are not running">
+        <action>Restart containers:
+          docker compose --env-file {docker_env_file} -p alquileres-wt-{{story_key}} up -d</action>
+        <action>Wait for health checks</action>
+      </check>
+    </check>
+
     <!-- Run validations -->
     <action>Determine test runner from project structure and stack patterns</action>
     <action>Run tests relevant to the current task</action>
@@ -319,6 +669,14 @@
 
     <check if="user chooses 'P' (Pause)">
       <action>Stash changes: git stash push -m "WIP: {{story_key}} task {{current_task_number}}"</action>
+
+      <!-- Stop Docker containers on pause (keep volumes for resume) -->
+      <check if="{docker_isolation} is true">
+        <action>Stop containers (keep volumes):
+          docker compose -p alquileres-wt-{{story_key}} stop</action>
+        <output>🐳 Docker containers stopped (volumes preserved for resume)</output>
+      </check>
+
       <action>Acquire board lock</action>
       <action>Update session status = "blocked", update last_checkpoint</action>
       <action>Release board lock</action>
@@ -528,6 +886,15 @@
     <check if="PR is merged">
       <!-- Return to project root before cleanup -->
       <action>Change working directory back to {{project_root}}</action>
+
+      <!-- Docker cleanup -->
+      <check if="{docker_isolation} is true">
+        <action>Stop and remove containers:
+          docker compose -p alquileres-wt-{{story_key}} down -v</action>
+        <action>Remove generated env file if it exists:
+          rm -f {{worktree_path}}/{docker_env_file}</action>
+        <output>🐳 Docker containers stopped and removed for {{story_key}}</output>
+      </check>
 
       <!-- Update main -->
       <action>git checkout main</action>

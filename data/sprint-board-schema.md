@@ -73,6 +73,8 @@ Each active development session registers itself when claiming a story.
 | `worktree` | string | Worktree path relative to project root |
 | `stack` | string | Detected or configured tech stack |
 | `status` | enum | `in-progress`, `checkpoint`, `blocked`, `review`, `done` |
+| `port_slot` | integer | Docker port slot (1-N, only when docker_isolation is enabled) |
+| `compose_project` | string | Docker Compose project name (e.g., "alquileres-wt-1-2-story") |
 | `started_at` | ISO 8601 | When the session started |
 | `last_checkpoint` | ISO 8601 | Last checkpoint timestamp |
 | `current_task` | string | Current task description |
@@ -143,3 +145,39 @@ BOARD="$PROJECT_ROOT/{board_dir}/sprint-board.yaml"
 ```
 
 **Critical:** Always use `git rev-parse --git-common-dir` (not `--show-toplevel`) to find the true project root from a worktree.
+
+---
+
+## Stale Session Detection
+
+Sessions are considered **stale** when `last_checkpoint` (or `started_at` if no checkpoint) exceeds `{docker_stale_hours}` hours ago AND the session status is not `done` or `review`.
+
+### Automatic Detection (Step 1)
+
+On every workflow run, after loading the board, the workflow scans for stale sessions and prompts the user to clean them up before proceeding.
+
+### Cleanup Sequence (per session)
+
+When a stale or orphaned session is cleaned up, the following resources are released in order:
+
+1. **Docker containers** (if `docker_isolation` enabled): `docker compose -p {compose_project} down -v`
+2. **Generated env file**: `rm -f {worktree_path}/{docker_env_file}`
+3. **Git worktree**: `git worktree remove {worktree_path} --force`
+4. **Git branch**: `git branch -D {branch_name}`
+5. **Board session**: Remove session entry, reset story to `ready-for-dev`, clear `claimed_by`
+
+### Manual Garbage Collection (GC Mode)
+
+The workflow supports a dedicated maintenance mode (invoked with `cleanup`/`gc`/`maintenance` argument, or option 4 in the "no stories" menu) that performs a full cross-reference audit:
+
+| Resource | Checked against | Orphan condition |
+|----------|----------------|------------------|
+| Worktree directories | Board sessions | Directory exists but no matching session |
+| Board sessions | Worktree directories | Session exists but directory missing |
+| Docker projects | Board sessions | Running project with no matching session |
+| Git branches | Board sessions | Branch matches pattern but no session |
+
+GC mode offers three cleanup levels:
+- **All orphans** — Clean only resources with no matching active session
+- **Selective** — User picks specific resources from a numbered list
+- **Force all** — Nuclear option: stop everything, reset board (requires "CONFIRM")

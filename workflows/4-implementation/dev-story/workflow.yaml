@@ -19,6 +19,16 @@ board_dir: "{ext_config_source}:board_dir"
 default_stack: "{ext_config_source}:default_stack"
 pr_merge_strategy: "{ext_config_source}:pr_merge_strategy"
 
+# Docker isolation variables
+docker_isolation: "{ext_config_source}:docker_isolation"
+docker_port_base: "{ext_config_source}:docker_port_base"
+docker_port_step: "{ext_config_source}:docker_port_step"
+docker_max_worktrees: "{ext_config_source}:docker_max_worktrees"
+docker_compose_file: "{ext_config_source}:docker_compose_file"
+docker_shared_services: "{ext_config_source}:docker_shared_services"
+docker_env_file: "{ext_config_source}:docker_env_file"
+docker_stale_hours: "{ext_config_source}:docker_stale_hours"
+
 # Workflow components
 installed_path: "{project-root}/_bmad/bmm-multi-dev/workflows/4-implementation/dev-story"
 instructions: "{installed_path}/instructions.xml"

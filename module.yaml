@@ -45,3 +45,49 @@ pr_merge_strategy:
       label: "Merge commit"
     - value: "rebase"
       label: "Rebase and merge"
+
+# Docker isolation per worktree
+docker_isolation:
+  prompt: "Enable Docker container isolation per worktree?"
+  default: true
+  result: "{value}"
+  single-select:
+    - value: true
+      label: "Yes — each worktree gets its own Docker Compose project"
+    - value: false
+      label: "No — shared/manual container management"
+
+docker_port_base:
+  prompt: "Base port of the project's assigned block?"
+  default: 10200
+  result: "{value}"
+
+docker_port_step:
+  prompt: "Port offset between worktrees (determines max services per worktree)?"
+  default: 10
+  result: "{value}"
+
+docker_max_worktrees:
+  prompt: "Maximum parallel worktrees (base uses slot 0, worktrees use slots 1-N)?"
+  default: 9
+  result: "{value}"
+
+docker_compose_file:
+  prompt: "Docker Compose file name?"
+  default: "docker-compose.yml"
+  result: "{value}"
+
+docker_shared_services:
+  prompt: "Services to share across worktrees (comma-separated, or empty for none)?"
+  default: ""
+  result: "{value}"
+
+docker_env_file:
+  prompt: "Generated env file name per worktree?"
+  default: ".env.ports"
+  result: "{value}"
+
+docker_stale_hours:
+  prompt: "Hours of inactivity before a session is considered stale?"
+  default: 24
+  result: "{value}"

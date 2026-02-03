@@ -65,6 +65,22 @@ validation-rules:
 - [ ] **Verification Checklist Generated:** Step 7 produced actionable verification steps
 - [ ] **User Verified:** User confirmed manual verification passed
 
+## Docker Isolation (when enabled)
+
+- [ ] **Port Slot Allocated:** Port slot was allocated and recorded in sprint board
+- [ ] **Env File Generated:** {docker_env_file} was generated with correct port offsets
+- [ ] **Containers Healthy:** Containers started and passed health checks
+- [ ] **Containers Cleaned Up:** Containers were stopped/removed during cleanup
+- [ ] **Port Slot Released:** Port slot was released on session end
+
+## Resource Cleanup
+
+- [ ] **Stale Detection Ran:** Stale sessions were checked at workflow start
+- [ ] **No Orphaned Worktrees:** No worktree directories exist without matching board session
+- [ ] **No Ghost Sessions:** No board sessions exist without worktree on disk
+- [ ] **No Orphaned Containers:** No Docker projects running without matching session (when docker_isolation enabled)
+- [ ] **Board Consistent:** All board session entries match actual resource state
+
 ## Final Status
 
 - [ ] **Story Status:** Set to "review"
